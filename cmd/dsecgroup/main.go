@@ -1,14 +1,12 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/reckless-huang/dsecgroup/pkg/providers/aliyun"
@@ -57,7 +55,23 @@ func loadConfig() (Config, error) {
 
 // 获取本地公网IP
 func getLocalPublicIP() (string, error) {
-	resp, err := http.Get("https://ip.me")
+	req := &http.Request{
+		Method: "GET",
+		URL: &url.URL{
+			Scheme: "https",
+			Host:   "ip.me",
+		},
+		Header: map[string][]string{
+			"User-Agent": {"curl/7.68.0"},
+			"Accept":     {"*/*"},
+		},
+	}
+	client := &http.Client{
+		Transport: &http.Transport{
+			// 指定ipv4
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("get public IP failed: %v", err)
 	}
@@ -71,9 +85,6 @@ func getLocalPublicIP() (string, error) {
 
 	// 提取纯 IP 地址
 	ip := strings.TrimSpace(string(body))
-	// 移除任何 HTML 标签和其他内容
-	ip = regexp.MustCompile(`<[^>]*>`).ReplaceAllString(ip, "")
-	ip = strings.TrimSpace(ip)
 
 	// 验证是否是有效的 IP 地址
 	if net.ParseIP(ip) == nil {
@@ -81,13 +92,6 @@ func getLocalPublicIP() (string, error) {
 	}
 
 	return ip, nil
-}
-
-// 生成规则哈希
-func generateRuleHash(rule types.SecurityRule) string {
-	h := sha1.New()
-	h.Write([]byte(rule.GetRuleKey()))
-	return hex.EncodeToString(h.Sum(nil))
 }
 
 func main() {
@@ -183,11 +187,21 @@ func newListSecgroupsCmd() *cobra.Command {
 		Use:   "list-secgroups",
 		Short: "List security groups",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 读取配置
+			cfg, err := loadConfig()
+			if err != nil {
+				return fmt.Errorf("load config failed: %v", err)
+			}
+			if cfg.CurrentRegion == "" {
+				return fmt.Errorf("current region is not set")
+			} else {
+				region = cfg.CurrentRegion
+				fmt.Printf("Current region: %s\n", cfg.CurrentRegion)
+			}
 			p, err := createProvider()
 			if err != nil {
 				return err
 			}
-
 			groups, err := p.ListSecurityGroups()
 			if err != nil {
 				return err
