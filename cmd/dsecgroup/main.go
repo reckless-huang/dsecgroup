@@ -3,12 +3,15 @@ package main
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
+	"github.com/olekukonko/tablewriter"
 	"github.com/reckless-huang/dsecgroup/pkg/providers/aliyun"
 	"github.com/reckless-huang/dsecgroup/pkg/types"
 	"github.com/spf13/cobra"
@@ -25,9 +28,18 @@ var (
 
 // Config 配置结构
 type Config struct {
-	CurrentRegion        string `yaml:"current_region"`
-	CurrentInstance      string `yaml:"current_instance"`
-	CurrentSecurityGroup string `yaml:"current_security_group"`
+	CurrentRegion        string    `yaml:"current_region"`
+	CurrentInstance      string    `yaml:"current_instance"`
+	CurrentSecurityGroup string    `yaml:"current_security_group"`
+	AccessKey            string    `yaml:"access_key"`
+	SecretKey            string    `yaml:"secret_key"`
+	Log                  LogConfig `yaml:"log"`
+}
+
+// 添加日志配置结构
+type LogConfig struct {
+	Level  string `yaml:"level"`
+	Format string `yaml:"format"`
 }
 
 // 保存配置
@@ -94,6 +106,36 @@ func getLocalPublicIP() (string, error) {
 	return ip, nil
 }
 
+func initLogger(cfg LogConfig) {
+	var level slog.Level
+	switch cfg.Level {
+	case "debug":
+		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{
+		Level: level,
+	}
+
+	var handler slog.Handler
+	if cfg.Format == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "dsecgroup",
@@ -121,6 +163,14 @@ func main() {
 		newQuickAddLocalIPCmd(),
 	)
 
+	// 初始化日志
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	initLogger(cfg.Log)
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -133,10 +183,19 @@ func createProvider() (types.SecurityGroupProvider, error) {
 	ak := accessKey
 	sk := secretKey
 
-	if ak == "" {
-		ak = os.Getenv("ALICLOUD_ACCESS_KEY")
+	// 如果命令行参数没有提供，则从配置文件获取
+	if ak == "" || sk == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			return nil, fmt.Errorf("load config failed: %v", err)
+		}
+		ak = cfg.AccessKey
+		sk = cfg.SecretKey
 	}
-	if sk == "" {
+
+	// 如果配置文件也没有提供，则从环境变量获取
+	if ak == "" || sk == "" {
+		ak = os.Getenv("ALICLOUD_ACCESS_KEY")
 		sk = os.Getenv("ALICLOUD_SECRET_KEY")
 	}
 
@@ -172,9 +231,16 @@ func newListRegionsCmd() *cobra.Command {
 				return err
 			}
 
+			// 创建表格
+			table := tablewriter.NewWriter(os.Stdout)
+			table.SetHeader([]string{"Region ID", "Local Name"})
+
 			for _, r := range regions {
-				fmt.Printf("%s\t%s\n", r.RegionID, r.LocalName)
+				table.Append([]string{r.RegionID, r.LocalName})
 			}
+
+			// 渲染表格
+			table.Render()
 			return nil
 		},
 	}
@@ -202,14 +268,21 @@ func newListSecgroupsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			groups, err := p.ListSecurityGroups()
+			secGroups, err := p.ListSecurityGroups()
 			if err != nil {
 				return err
 			}
 
-			for _, g := range groups {
-				fmt.Printf("%s\t%s\t%s\n", g.GroupID, g.Name, g.Description)
+			// 创建表格
+			table := tablewriter.NewWriter(os.Stdout)
+			table.SetHeader([]string{"SecGroup ID", "Name", "Description"})
+
+			for _, sg := range secGroups {
+				table.Append([]string{sg.GroupID, sg.Name, sg.Description})
 			}
+
+			// 渲染表格
+			table.Render()
 			return nil
 		},
 	}
@@ -326,19 +399,22 @@ func newListSecgroupRulesCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Printf("Fetching rules for security group %s...\n", secgroupID)
+			slog.Info("Fetching rules for security group", "secgroup-id", secgroupID)
 			rules, err := p.ListRules(secgroupID)
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("\nFound %d rules:\n", len(rules))
-			fmt.Printf("%-40s\t%-20s\t%-8s\t%-10s\t%-10s\t%-10s\t%-8s\t%s\n",
-				"RULE HASH", "IP", "PORT", "PROTOCOL", "DIRECTION", "ACTION", "PRIORITY", "DESCRIPTION")
-			for _, r := range rules {
-				fmt.Printf("%-40s\t%-20s\t%-8d\t%-10s\t%-10s\t%-10s\t%-8d\t%s\n",
-					r.RuleHash, r.IP, r.Port, r.Protocol, r.Direction, r.Action, r.Priority, r.Description)
+			// 创建表格
+			table := tablewriter.NewWriter(os.Stdout)
+			table.SetHeader([]string{"Rule ID", "IP", "Protocol", "Port", "Direction", "Action", "Priority", "Description"})
+
+			for _, rule := range rules {
+				table.Append([]string{rule.RuleHash, rule.IP, rule.Protocol, strconv.Itoa(rule.Port), rule.Direction, string(rule.Action), strconv.Itoa(rule.Priority), rule.Description})
 			}
+
+			// 渲染表格
+			table.Render()
 			return nil
 		},
 	}
@@ -409,7 +485,7 @@ func newListInstancesCmd() *cobra.Command {
 				}
 				region = cfg.CurrentRegion
 			}
-			fmt.Printf("Using region: %s\n", region)
+			slog.Info("Using region", "region", region)
 
 			p, err := createProvider()
 			if err != nil {
@@ -421,17 +497,25 @@ func newListInstancesCmd() *cobra.Command {
 				return fmt.Errorf("provider does not support instance operations")
 			}
 
-			fmt.Println("Fetching instances...")
+			slog.Info("Fetching instances...")
 			instances, err := instanceProvider.ListInstances()
 			if err != nil {
 				return err
 			}
 
-			fmt.Printf("Found %d instances\n", len(instances))
+			slog.Info("Found instances", "count", len(instances))
+
+			// 创建表格
+			table := tablewriter.NewWriter(os.Stdout)
+			table.SetHeader([]string{"ID", "NAME", "STATUS", "PRIVATE_IP", "PUBLIC_IP"})
+
 			for _, inst := range instances {
-				fmt.Printf("ID: %s\tName: %s\tStatus: %s\tPrivateIP: %s\tPublicIP: %s\n",
-					inst.InstanceID, inst.Name, inst.Status, inst.PrivateIP, inst.PublicIP)
+				table.Append([]string{inst.InstanceID, inst.Name, inst.Status, inst.PrivateIP, inst.PublicIP})
 			}
+
+			// 渲染表格
+			table.Render()
+
 			return nil
 		},
 	}
@@ -516,12 +600,10 @@ func newListInstanceSecgroupsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
 			instanceProvider, ok := p.(types.InstanceProvider)
 			if !ok {
 				return fmt.Errorf("provider does not support instance operations")
 			}
-
 			fmt.Printf("Fetching security groups for instance %s...\n", cfg.CurrentInstance)
 			groups, err := instanceProvider.ListInstanceSecurityGroups(cfg.CurrentInstance)
 			if err != nil {
@@ -646,83 +728,72 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 				return err
 			}
 
-			// 如果指定了 all-ports 或没有指定端口，则添加全端口规则
+			// 添加或更新规则
 			if allPorts || !cmd.Flags().Changed("port") {
-				rule := types.SecurityRule{
-					IP:          ip,
-					Port:        -1,
-					Protocol:    "tcp",
-					Direction:   "ingress",
-					Action:      types.ActionAllow,
-					Priority:    1,
-					Description: "gen_by_dsecgroup (all ports)",
-				}
-
-				// 检查规则是否存在
-				rules, err := p.ListRules(cfg.CurrentSecurityGroup)
-				if err != nil {
-					return err
-				}
-
-				// 使用 Provider 的规则哈希器比较规则
-				if hasher, ok := p.(types.RuleHasher); ok {
-					for _, existing := range rules {
-						if hasher.IsRuleEqual(existing, rule) {
-							fmt.Printf("Rule already exists for IP %s (all ports)\n", ip)
-							return nil
-						}
-					}
-				}
-
-				// 添加新规则
-				if err := p.AddRule(cfg.CurrentSecurityGroup, rule); err != nil {
-					return fmt.Errorf("add rule failed: %v", err)
-				}
-
-				fmt.Printf("Successfully added rule for IP %s (all ports)\n", ip)
-				return nil
+				return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, -1, "gen_by_dsecgroup (all ports)")
 			}
 
 			// 添加指定端口的规则
-			rule := types.SecurityRule{
-				IP:          ip,
-				Port:        port,
-				Protocol:    "tcp",
-				Direction:   "ingress",
-				Action:      types.ActionAllow,
-				Priority:    1,
-				Description: fmt.Sprintf("gen_by_dsecgroup (port %d)", port),
-			}
-
-			// 检查规则是否存在
-			rules, err := p.ListRules(cfg.CurrentSecurityGroup)
-			if err != nil {
-				return err
-			}
-
-			// 检查是否存在相同的规则（不使用哈希，直接比较关键字段）
-			for _, existing := range rules {
-				if existing.IP == ip &&
-					existing.Port == port &&
-					existing.Protocol == rule.Protocol &&
-					existing.Direction == rule.Direction &&
-					existing.Action == rule.Action {
-					fmt.Printf("Rule already exists for IP %s on port %d\n", ip, port)
-					return nil
-				}
-			}
-
-			// 添加新规则
-			if err := p.AddRule(cfg.CurrentSecurityGroup, rule); err != nil {
-				return fmt.Errorf("add rule failed: %v", err)
-			}
-
-			fmt.Printf("Successfully added rule for IP %s on port %d\n", ip, port)
-			return nil
+			return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (port %d)", port))
 		},
 	}
 
 	cmd.Flags().IntVarP(&port, "port", "p", 22, "Port number to allow access")
 	cmd.Flags().BoolVar(&allPorts, "all-ports", false, "Allow access to all ports")
 	return cmd
+}
+
+// 添加或更新规则的通用函数
+func addOrUpdateRule(p types.SecurityGroupProvider, secGroupID, ip string, port int, desc string) error {
+	rule := types.SecurityRule{
+		IP:          ip,
+		Port:        port,
+		Protocol:    "tcp",
+		Direction:   "ingress",
+		Action:      types.ActionAllow,
+		Priority:    1,
+		Description: desc,
+	}
+
+	// 检查规则是否存在
+	rules, err := p.ListRules(secGroupID)
+	if err != nil {
+		return err
+	}
+
+	matchRules := []types.SecurityRule{}
+	if hasher, ok := p.(types.RuleHasher); ok {
+		for _, existing := range rules {
+			if existing.Description == desc {
+				matchRules = append(matchRules, existing)
+			}
+			if hasher.IsRuleEqual(existing, rule) {
+				slog.Info("Rule already exists for IP %s", "ip", ip)
+				return nil
+			}
+		}
+	}
+
+	if len(matchRules) > 1 {
+		slog.Error("Found multiple rules with the same description", "desc", desc)
+		slog.Error("Rules", "rules", matchRules)
+		slog.Error("run remove-secgroup-rule to remove the existing rule")
+		return fmt.Errorf("found multiple rules with the same description: %v", matchRules)
+	}
+
+	create := len(matchRules) == 0
+	if create {
+		slog.Info("No rule found with the same description, creating new rule", "desc", desc)
+		if err := p.AddRule(secGroupID, rule); err != nil {
+			return fmt.Errorf("add rule failed: %v", err)
+		}
+	} else {
+		rule = matchRules[0]
+		if err := p.UpdateRule(secGroupID, rule.RuleHash, rule); err != nil {
+			return fmt.Errorf("update rule failed: %v", err)
+		}
+	}
+
+	fmt.Printf("Successfully applied rule for IP %s on port %d\n", ip, port)
+	return nil
 }

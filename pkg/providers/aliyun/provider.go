@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 
 	"github.com/reckless-huang/dsecgroup/pkg/types"
 
@@ -152,16 +153,16 @@ func (p *Provider) AddRule(groupID string, rule types.SecurityRule) error {
 	request.Description = rule.Description
 
 	// 打印关键参数
-	fmt.Printf("\n提交参数:\n")
-	fmt.Printf("RegionId: %s\n", request.RegionId)
-	fmt.Printf("SecurityGroupId: %s\n", request.SecurityGroupId)
-	fmt.Printf("IpProtocol: %s\n", request.IpProtocol)
-	fmt.Printf("PortRange: %s\n", request.PortRange)
-	fmt.Printf("SourceCidrIp: %s\n", request.SourceCidrIp)
-	fmt.Printf("Policy: %s\n", request.Policy)
-	fmt.Printf("Priority: %s\n", request.Priority)
-	fmt.Printf("Description: %s\n", request.Description)
-	fmt.Printf("NicType: %s\n", request.NicType)
+	slog.Debug("AddRule", "rule", rule)
+	slog.Debug("RegionId", "region", request.RegionId)
+	slog.Debug("SecurityGroupId", "group", request.SecurityGroupId)
+	slog.Debug("IpProtocol", "protocol", request.IpProtocol)
+	slog.Debug("PortRange", "port", request.PortRange)
+	slog.Debug("SourceCidrIp", "ip", request.SourceCidrIp)
+	slog.Debug("Policy", "policy", request.Policy)
+	slog.Debug("Priority", "priority", request.Priority)
+	slog.Debug("Description", "desc", request.Description)
+	slog.Debug("NicType", "nic", request.NicType)
 
 	_, err := p.client.AuthorizeSecurityGroup(request)
 	if err != nil {
@@ -290,7 +291,7 @@ func (p *Provider) ListRegions() ([]types.Region, error) {
 
 // ListInstances 获取实例列表
 func (p *Provider) ListInstances() ([]types.Instance, error) {
-	fmt.Printf("Requesting instances for region: %s\n", p.region)
+	slog.Debug("Requesting instances for region: %s\n", p.region)
 	request := ecs.CreateDescribeInstancesRequest()
 	request.RegionId = p.region
 
@@ -300,26 +301,26 @@ func (p *Provider) ListInstances() ([]types.Instance, error) {
 	}
 
 	// 打印完整响应
-	fmt.Printf("\nAPI Response Details: %+v\n", response)
-	fmt.Printf("Total Count: %d\n", response.TotalCount)
-	fmt.Printf("Page Size: %d\n", response.PageSize)
-	fmt.Printf("Page Number: %d\n", response.PageNumber)
-	fmt.Printf("Request ID: %s\n", response.RequestId)
+	slog.Debug("API Response Details: %+v\n", response)
+	slog.Debug("Total Count: %d\n", response.TotalCount)
+	slog.Debug("Page Size: %d\n", response.PageSize)
+	slog.Debug("Page Number: %d\n", response.PageNumber)
+	slog.Debug("Request ID: %s\n", response.RequestId)
 
 	// 打印每个实例的详细信息
 	for _, i := range response.Instances.Instance {
-		fmt.Printf("\n----------------------------------------\n")
-		fmt.Printf("Instance ID: %s\n", i.InstanceId)
-		fmt.Printf("Name: %s\n", i.InstanceName)
-		fmt.Printf("Status: %s\n", i.Status)
-		fmt.Printf("Instance Type: %s\n", i.InstanceType)
-		fmt.Printf("OS: %s\n", i.OSNameEn)
-		fmt.Printf("Zone: %s\n", i.ZoneId)
-		fmt.Printf("Private IP: %v\n", i.VpcAttributes.PrivateIpAddress.IpAddress)
-		fmt.Printf("Public IP: %v\n", i.PublicIpAddress.IpAddress)
-		fmt.Printf("Security Groups: %v\n", i.SecurityGroupIds.SecurityGroupId)
-		fmt.Printf("Created Time: %s\n", i.CreationTime)
-		fmt.Printf("----------------------------------------\n")
+		slog.Debug("\n----------------------------------------\n")
+		slog.Debug("Instance ID: %s\n", i.InstanceId)
+		slog.Debug("Name: %s\n", i.InstanceName)
+		slog.Debug("Status: %s\n", i.Status)
+		slog.Debug("Instance Type: %s\n", i.InstanceType)
+		slog.Debug("OS: %s\n", i.OSNameEn)
+		slog.Debug("Zone: %s\n", i.ZoneId)
+		slog.Debug("Private IP: %v\n", i.VpcAttributes.PrivateIpAddress.IpAddress)
+		slog.Debug("Public IP: %v\n", i.PublicIpAddress.IpAddress)
+		slog.Debug("Security Groups: %v\n", i.SecurityGroupIds.SecurityGroupId)
+		slog.Debug("Created Time: %s\n", i.CreationTime)
+		slog.Debug("----------------------------------------\n")
 	}
 
 	instances := make([]types.Instance, 0, len(response.Instances.Instance))
