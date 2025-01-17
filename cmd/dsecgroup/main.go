@@ -763,7 +763,9 @@ func addOrUpdateRule(p types.SecurityGroupProvider, secGroupID, ip string, port 
 
 	matchRules := []types.SecurityRule{}
 	if hasher, ok := p.(types.RuleHasher); ok {
+		slog.Debug("desc", "desc", desc)
 		for _, existing := range rules {
+			slog.Debug("existing rule", "rule", existing.Description)
 			if existing.Description == desc {
 				matchRules = append(matchRules, existing)
 			}

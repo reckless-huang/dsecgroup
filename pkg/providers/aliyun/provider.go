@@ -13,9 +13,9 @@ import (
 
 // Provider 实现阿里云的安全组和实例操作
 type Provider struct {
-	client     *ecs.Client
-	region     string
-	ruleHasher *RuleHasher
+	client *ecs.Client
+	region string
+	RuleHasher
 }
 
 // NewProvider 创建阿里云 Provider 实例
@@ -37,7 +37,7 @@ func NewProvider(config types.SecurityGroupConfig) (*Provider, error) {
 	return &Provider{
 		client:     client,
 		region:     config.Region,
-		ruleHasher: &RuleHasher{},
+		RuleHasher: RuleHasher{},
 	}, nil
 }
 
