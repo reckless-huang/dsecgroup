@@ -13,6 +13,11 @@ A unified interface for managing security groups across different cloud provider
   - Security Group Rules (add, remove, update, query)
   - Instance Security Group Association
   - Region Management
+- Rule management features:
+  - Rule aliases support
+  - Batch rule deletion
+  - Local IP quick-add
+  - Rule description based matching
 
 ## Quick Start
 
@@ -22,7 +27,46 @@ A unified interface for managing security groups across different cloud provider
 go get github.com/your-username/your-project
 ```
 
-### Basic Usage
+### Configuration
+
+Create a `config.yaml` file:
+
+```yaml
+current_region: cn-hangzhou
+current_instance: i-xxxxx
+current_security_group: sg-xxxxx
+access_key: your-access-key
+secret_key: your-secret-key
+
+log:
+  level: "debug"    # Options: debug, info, warn, error
+  format: "text"    # Options: text, json
+
+rule_aliases:
+  home: "Home IP"
+  office: "Office IP"
+  default: "Temporary IP"
+```
+
+### Command Line Usage
+
+```bash
+# List security groups
+dsecgroup list-secgroups
+
+# List security group rules
+dsecgroup list-secgroup-rules
+
+# Quick add local IP
+dsecgroup quick-add-local --port 22 --alias home
+dsecgroup quick-add-local --all-ports --alias office
+
+# Remove rules
+dsecgroup remove-secgroup-rule -i rule-id-1,rule-id-2  # Remove by rule IDs
+dsecgroup remove-secgroup-rule --alias home            # Remove by alias
+```
+
+### Programmatic Usage
 
 ```go
 import (
@@ -45,13 +89,7 @@ func main() {
         panic(err)
     }
 
-    // Create Security Group
-    sg, err := provider.CreateSecurityGroup("test-group", "test security group")
-    if err != nil {
-        panic(err)
-    }
-
-    // Add Security Group Rule
+    // Add rule with description
     rule := types.SecurityRule{
         IP:          "0.0.0.0/0",
         Port:        80,
@@ -59,7 +97,7 @@ func main() {
         Direction:   "ingress",
         Action:      types.ActionAllow,
         Priority:    1,
-        Description: "Allow HTTP access",
+        Description: "gen_by_dsecgroup (web server)",
     }
     
     err = provider.AddRule(sg.GroupID, rule)
@@ -77,36 +115,37 @@ func main() {
 
 ```
 .
+├── cmd/
+│   └── dsecgroup/     # Command line tool
 ├── pkg/
-│   ├── types/           # Interface definitions and common types
-│   └── providers/       # Cloud provider implementations
-│       └── aliyun/      # Alibaba Cloud implementation
-├── docs/               # Documentation
-│   ├── en/            # English docs
-│   └── zh/            # Chinese docs
+│   ├── types/         # Interface definitions and common types
+│   └── providers/     # Cloud provider implementations
+│       └── aliyun/    # Alibaba Cloud implementation
+├── docs/             # Documentation
 └── README.md
 ```
 
-## Adding New Cloud Provider Support
+## Features in Detail
 
-1. Create a new package under `pkg/providers`
-2. Implement the `types.SecurityGroupProvider` and `types.InstanceProvider` interfaces
-3. Provide configuration and initialization methods
+### Rule Aliases
+Define meaningful aliases for your IP rules in config.yaml. When adding or removing rules, use these aliases instead of remembering IPs.
+
+### Batch Operations
+Support batch operations for rule management:
+- Remove multiple rules by IDs
+- Remove rules by alias matching
+- Quick add rules with different ports
+
+### Local IP Management
+Automatically detect and manage rules for your local public IP:
+- Quick add with port specification
+- Support all ports access
+- Alias-based rule management
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contact
-
-If you have any questions or suggestions, please feel free to open an issue or pull request.

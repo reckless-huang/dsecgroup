@@ -13,6 +13,11 @@
   - 安全组规则（添加、删除、更新、查询）
   - 实例安全组关联
   - 区域管理
+- 规则管理特性：
+  - 规则别名支持
+  - 批量规则删除
+  - 本地IP快速添加
+  - 基于描述的规则匹配
 
 ## 快速开始
 
@@ -20,6 +25,45 @@
 
 ```bash
 go get github.com/your-username/your-project
+```
+
+### 配置
+
+创建 `config.yaml` 文件：
+
+```yaml
+current_region: cn-hangzhou
+current_instance: i-xxxxx
+current_security_group: sg-xxxxx
+access_key: your-access-key
+secret_key: your-secret-key
+
+log:
+  level: "debug"    # 可选值: debug, info, warn, error
+  format: "text"    # 可选值: text, json
+
+rule_aliases:
+  home: "家庭IP"
+  office: "办公室IP"
+  default: "临时IP"
+```
+
+### 命令行使用
+
+```bash
+# 列出安全组
+dsecgroup list-secgroups
+
+# 列出安全组规则
+dsecgroup list-secgroup-rules
+
+# 快速添加本地IP
+dsecgroup quick-add-local --port 22 --alias home
+dsecgroup quick-add-local --all-ports --alias office
+
+# 删除规则
+dsecgroup remove-secgroup-rule -i rule-id-1,rule-id-2  # 通过规则ID删除
+dsecgroup remove-secgroup-rule --alias home            # 通过别名删除
 ```
 
 ### 基本用法
