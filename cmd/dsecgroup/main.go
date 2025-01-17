@@ -28,12 +28,13 @@ var (
 
 // Config 配置结构
 type Config struct {
-	CurrentRegion        string    `yaml:"current_region"`
-	CurrentInstance      string    `yaml:"current_instance"`
-	CurrentSecurityGroup string    `yaml:"current_security_group"`
-	AccessKey            string    `yaml:"access_key"`
-	SecretKey            string    `yaml:"secret_key"`
-	Log                  LogConfig `yaml:"log"`
+	CurrentRegion        string            `yaml:"current_region"`
+	CurrentInstance      string            `yaml:"current_instance"`
+	CurrentSecurityGroup string            `yaml:"current_security_group"`
+	AccessKey            string            `yaml:"access_key"`
+	SecretKey            string            `yaml:"secret_key"`
+	Log                  LogConfig         `yaml:"log"`
+	RuleAliases          map[string]string `yaml:"rule_aliases"`
 }
 
 // 添加日志配置结构
@@ -327,42 +328,104 @@ func newAddSecgroupRuleCmd() *cobra.Command {
 	return cmd
 }
 
-// 删除规则
+// 修改删除规则命令
 func newRemoveSecgroupRuleCmd() *cobra.Command {
 	var (
 		secgroupID string
-		port       int
-		ip         string
+		ruleID     string // 保持为字符串，但支持逗号分隔
+		alias      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "remove-secgroup-rule",
 		Short: "Remove security group rule",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 读取配置
+			cfg, err := loadConfig()
+			if err != nil {
+				return fmt.Errorf("load config failed: %v", err)
+			}
+
+			// 设置region
+			if cfg.CurrentRegion == "" {
+				return fmt.Errorf("no region selected, please use select-region command first")
+			}
+			region = cfg.CurrentRegion
+			slog.Debug("Using region", "region", region)
+
+			// 如果未指定安全组ID，使用当前选择的安全组
+			if secgroupID == "" {
+				if cfg.CurrentSecurityGroup == "" {
+					return fmt.Errorf("no security group specified or selected")
+				}
+				secgroupID = cfg.CurrentSecurityGroup
+			}
+
 			p, err := createProvider()
 			if err != nil {
 				return err
 			}
 
-			rule := types.SecurityRule{
-				IP:        ip,
-				Port:      port,
-				Protocol:  "tcp",
-				Direction: "ingress",
-				Action:    types.ActionAllow,
-				Priority:  1,
+			// 获取所有规则
+			rules, err := p.ListRules(secgroupID)
+			if err != nil {
+				return err
 			}
 
-			return p.RemoveRule(secgroupID, rule)
+			// 如果指定了规则ID，直接删除
+			if ruleID != "" {
+				// 分割规则ID
+				ruleIDs := strings.Split(ruleID, ",")
+				slog.Debug("Removing rules by ID", "rule_ids", ruleIDs)
+
+				for _, ruleID := range ruleIDs {
+					for _, rule := range rules {
+						if rule.RuleHash == ruleID {
+							if err := p.RemoveRule(secgroupID, rule); err != nil {
+								return err
+							}
+							slog.Info("Rule removed", "rule_id", ruleID)
+						}
+					}
+				}
+				return nil
+			}
+
+			// 如果指定了别名，通过描述匹配删除
+			if alias != "" {
+				aliasDesc := alias
+				if desc, ok := cfg.RuleAliases[alias]; ok {
+					aliasDesc = desc
+				}
+
+				var matchRules []types.SecurityRule
+				for _, rule := range rules {
+					if strings.Contains(rule.Description, fmt.Sprintf("(%s", aliasDesc)) {
+						matchRules = append(matchRules, rule)
+					}
+				}
+
+				if len(matchRules) == 0 {
+					return fmt.Errorf("no rules found with alias: %s", alias)
+				}
+
+				slog.Info("Removing rules", "count", len(matchRules))
+				for _, rule := range matchRules {
+					if err := p.RemoveRule(secgroupID, rule); err != nil {
+						return err
+					}
+					slog.Info("Rule removed", "rule_id", rule.RuleHash)
+				}
+				return nil
+			}
+
+			return fmt.Errorf("either rule IDs or --alias must be specified")
 		},
 	}
 
-	cmd.Flags().StringVarP(&secgroupID, "secgroup-id", "g", "", "Security group ID")
-	cmd.Flags().IntVarP(&port, "port", "P", 22, "Port number")
-	cmd.Flags().StringVarP(&ip, "ip", "i", "", "IP address")
-	cmd.MarkFlagRequired("secgroup-id")
-	cmd.MarkFlagRequired("ip")
-
+	cmd.Flags().StringVarP(&secgroupID, "secgroup-id", "g", "", "Security group ID (optional if group selected)")
+	cmd.Flags().StringVarP(&ruleID, "rule-id", "i", "", "Rule ID to remove (comma separated for multiple)")
+	cmd.Flags().StringVarP(&alias, "alias", "a", "", "Rule alias to remove")
 	return cmd
 }
 
@@ -694,6 +757,7 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 	var (
 		port     int
 		allPorts bool
+		alias    string
 	)
 
 	cmd := &cobra.Command{
@@ -714,7 +778,7 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 
 			// 设置全局 region 变量
 			region = cfg.CurrentRegion
-			fmt.Printf("Using region: %s\n", region)
+			slog.Debug("Using region", "region", region)
 
 			// 获取本地公网IP
 			ip, err := getLocalPublicIP()
@@ -723,6 +787,22 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 			}
 			ip = ip + "/32" // 转换为CIDR格式
 
+			// 处理规则别名
+			aliasDesc := "临时IP"
+			if alias != "" {
+				if desc, ok := cfg.RuleAliases[alias]; ok {
+					aliasDesc = desc
+					slog.Debug("Using alias description", "alias", alias, "desc", aliasDesc)
+				} else {
+					slog.Warn("Alias not found in config, using alias as description", "alias", alias)
+					aliasDesc = alias
+				}
+			} else {
+				if desc, ok := cfg.RuleAliases["default"]; ok {
+					aliasDesc = desc
+				}
+			}
+
 			p, err := createProvider()
 			if err != nil {
 				return err
@@ -730,16 +810,17 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 
 			// 添加或更新规则
 			if allPorts || !cmd.Flags().Changed("port") {
-				return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, -1, "gen_by_dsecgroup (all ports)")
+				return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, -1, fmt.Sprintf("gen_by_dsecgroup (%s, all ports)", aliasDesc))
 			}
 
 			// 添加指定端口的规则
-			return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (port %d)", port))
+			return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (%s, port %d)", aliasDesc, port))
 		},
 	}
 
 	cmd.Flags().IntVarP(&port, "port", "p", 22, "Port number to allow access")
 	cmd.Flags().BoolVar(&allPorts, "all-ports", false, "Allow access to all ports")
+	cmd.Flags().StringVarP(&alias, "alias", "a", "", "Rule alias name defined in config")
 	return cmd
 }
 

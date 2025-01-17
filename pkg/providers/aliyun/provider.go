@@ -177,11 +177,7 @@ func (p *Provider) RemoveRule(groupID string, rule types.SecurityRule) error {
 	request := ecs.CreateRevokeSecurityGroupRequest()
 	request.RegionId = p.region
 	request.SecurityGroupId = groupID
-	request.IpProtocol = rule.Protocol
-	request.PortRange = fmt.Sprintf("%d/%d", rule.Port, rule.Port)
-	request.SourceCidrIp = rule.IP
-	request.Policy = string(rule.Action)
-	request.Priority = fmt.Sprintf("%d", rule.Priority)
+	request.SecurityGroupRuleId = &[]string{rule.RuleID}
 
 	_, err := p.client.RevokeSecurityGroup(request)
 	if err != nil {
@@ -250,6 +246,7 @@ func (p *Provider) ListRules(groupID string) ([]types.SecurityRule, error) {
 	rules := make([]types.SecurityRule, 0, len(response.Permissions.Permission))
 	for _, r := range response.Permissions.Permission {
 		rule := types.SecurityRule{
+			RuleID:      r.SecurityGroupRuleId, // 云厂商规则ID
 			IP:          r.SourceCidrIp,
 			Port:        parsePort(r.PortRange),
 			Protocol:    r.IpProtocol,
@@ -258,8 +255,8 @@ func (p *Provider) ListRules(groupID string) ([]types.SecurityRule, error) {
 			Priority:    parsePriority(r.Priority),
 			Description: r.Description,
 		}
-		// 生成规则哈希
-		rule.RuleHash = generateRuleHash(rule)
+		// 生成本地哈希，用于跨云规则匹配
+		rule.RuleHash = p.GenerateRuleHash(rule)
 		rules = append(rules, rule)
 	}
 

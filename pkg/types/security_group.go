@@ -22,7 +22,8 @@ type RuleHasher interface {
 
 // SecurityRule 表示一条安全组规则
 type SecurityRule struct {
-	RuleHash    string `json:"rule_hash"`
+	RuleHash    string `json:"rule_hash"` // 用于兼容性保留
+	RuleID      string `json:"rule_id"`   // 云厂商的规则ID
 	IP          string `json:"ip"`
 	Port        int    `json:"port"`
 	Protocol    string `json:"protocol"`
@@ -34,7 +35,13 @@ type SecurityRule struct {
 
 // GetRuleKey 返回用于生成哈希的规则关键信息
 func (r *SecurityRule) GetRuleKey() string {
-	return fmt.Sprintf("%s:%d:%s:%s:%s", r.IP, r.Port, r.Protocol, r.Direction, r.Action)
+	return fmt.Sprintf("%s:%d:%s:%s:%s",
+		r.IP,
+		r.Port,
+		r.Protocol,
+		r.Direction,
+		r.Action,
+	)
 }
 
 // SecurityGroup 表示安全组信息
