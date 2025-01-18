@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/reckless-huang/dsecgroup/pkg/providers/aliyun"
@@ -83,6 +84,7 @@ func getLocalPublicIP() (string, error) {
 		Transport: &http.Transport{
 			// 指定ipv4
 		},
+		Timeout: time.Second * 10,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -310,7 +312,7 @@ func newAddSecgroupRuleCmd() *cobra.Command {
 			rule := types.SecurityRule{
 				IP:        ip,
 				Port:      port,
-				Protocol:  "tcp",
+				Protocol:  "ALL",
 				Direction: "ingress",
 				Action:    types.ActionAllow,
 				Priority:  1,
@@ -808,7 +810,7 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 				return err
 			}
 
-			// 添加或更新规则
+			// 修改这部分逻辑：如果没有指定端口或设置了 allPorts，则添加允许所有端口的规则
 			if allPorts || !cmd.Flags().Changed("port") {
 				return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, -1, fmt.Sprintf("gen_by_dsecgroup (%s, all ports)", aliasDesc))
 			}
@@ -818,7 +820,8 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().IntVarP(&port, "port", "p", 22, "Port number to allow access")
+	// 修改默认端口的帮助文本，使其更清晰
+	cmd.Flags().IntVarP(&port, "port", "p", 22, "Specific port number to allow access (if not specified, all ports will be allowed)")
 	cmd.Flags().BoolVar(&allPorts, "all-ports", false, "Allow access to all ports")
 	cmd.Flags().StringVarP(&alias, "alias", "a", "", "Rule alias name defined in config")
 	return cmd
@@ -834,6 +837,11 @@ func addOrUpdateRule(p types.SecurityGroupProvider, secGroupID, ip string, port 
 		Action:      types.ActionAllow,
 		Priority:    1,
 		Description: desc,
+	}
+
+	// 如果是所有端口，则使用 all 协议
+	if port == -1 {
+		rule.Protocol = "all"
 	}
 
 	// 检查规则是否存在

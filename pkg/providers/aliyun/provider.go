@@ -127,13 +127,14 @@ func (p *Provider) AddRule(groupID string, rule types.SecurityRule) error {
 	request := ecs.CreateAuthorizeSecurityGroupRequest()
 	request.RegionId = p.region
 	request.SecurityGroupId = groupID
-	request.IpProtocol = rule.Protocol
 	request.NicType = "intranet" // 默认为内网
 
-	// 处理端口范围
+	// 设置协议和端口
 	if rule.Port == -1 {
-		request.PortRange = "1/65535" // 阿里云使用 1/65535 表示所有端口
+		request.IpProtocol = "all"
+		request.PortRange = "-1/-1" // 阿里云使用 -1/-1 表示所有端口
 	} else {
+		request.IpProtocol = rule.Protocol
 		request.PortRange = fmt.Sprintf("%d/%d", rule.Port, rule.Port)
 	}
 
@@ -177,7 +178,24 @@ func (p *Provider) RemoveRule(groupID string, rule types.SecurityRule) error {
 	request := ecs.CreateRevokeSecurityGroupRequest()
 	request.RegionId = p.region
 	request.SecurityGroupId = groupID
-	request.SecurityGroupRuleId = &[]string{rule.RuleID}
+
+	// 如果有规则ID，只使用规则ID
+	if rule.RuleID != "" {
+		request.SecurityGroupRuleId = &[]string{rule.RuleID}
+	} else {
+		// 否则使用其他参数匹配规则
+		if rule.Port == -1 {
+			request.IpProtocol = "all"
+			request.PortRange = "-1/-1"
+		} else {
+			request.IpProtocol = rule.Protocol
+			request.PortRange = fmt.Sprintf("%d/%d", rule.Port, rule.Port)
+		}
+		request.SourceCidrIp = rule.IP
+		request.Policy = string(rule.Action)
+		request.Priority = fmt.Sprintf("%d", rule.Priority)
+		request.Description = rule.Description
+	}
 
 	_, err := p.client.RevokeSecurityGroup(request)
 	if err != nil {
@@ -190,10 +208,20 @@ func (p *Provider) RemoveRule(groupID string, rule types.SecurityRule) error {
 // UpdateRule 更新安全组规则
 func (p *Provider) UpdateRule(groupID string, ruleID string, rule types.SecurityRule) error {
 	// 阿里云不支持直接更新规则，需要先删除再添加
-	// 这里简单实现，实际可能需要更复杂的处理
-	if err := p.RemoveRule(groupID, rule); err != nil {
-		return err
+
+	// 创建删除请求，只使用规则ID
+	removeRequest := ecs.CreateRevokeSecurityGroupRequest()
+	removeRequest.RegionId = p.region
+	removeRequest.SecurityGroupId = groupID
+	removeRequest.SecurityGroupRuleId = &[]string{rule.RuleID}
+
+	// 执行删除
+	_, err := p.client.RevokeSecurityGroup(removeRequest)
+	if err != nil {
+		return fmt.Errorf("remove old rule failed: %v", err)
 	}
+
+	// 添加新规则
 	return p.AddRule(groupID, rule)
 }
 

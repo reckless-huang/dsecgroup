@@ -15,9 +15,6 @@ type RuleHasher struct{}
 func (h *RuleHasher) GenerateRuleHash(rule types.SecurityRule) string {
 	// 阿里云特殊处理：端口为 -1 时表示所有端口
 	port := rule.Port
-	if port == -1 {
-		port = 1 // 阿里云使用 1/65535 表示所有端口
-	}
 
 	key := fmt.Sprintf("%s:%d:%s:%s:%s",
 		rule.IP,
@@ -37,13 +34,6 @@ func (h *RuleHasher) IsRuleEqual(rule1, rule2 types.SecurityRule) bool {
 	// 阿里云特殊处理：比较时考虑端口的特殊情况
 	port1 := rule1.Port
 	port2 := rule2.Port
-	if port1 == -1 {
-		port1 = 1
-	}
-	if port2 == -1 {
-		port2 = 1
-	}
-
 	return rule1.IP == rule2.IP &&
 		port1 == port2 &&
 		rule1.Protocol == rule2.Protocol &&
