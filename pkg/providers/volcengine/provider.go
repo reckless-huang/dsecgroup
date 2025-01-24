@@ -17,6 +17,29 @@ type Provider struct {
 	types.RuleHasher
 }
 
+func (p *Provider) GetInstance(instanceID string) (*types.Instance, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *Provider) ListInstanceSecurityGroups(instanceID string) ([]types.SecurityGroup, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *Provider) AddInstanceToSecurityGroup(instanceID, securityGroupID string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (p *Provider) RemoveInstanceFromSecurityGroup(instanceID, securityGroupID string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+var _ types.SecurityGroupProvider = &Provider{}
+var _ types.InstanceProvider = &Provider{}
+
 // NewProvider 创建火山云提供商实例
 func NewProvider(config types.SecurityGroupConfig) (*Provider, error) {
 	accessKey := config.Credential["access_key_id"]
@@ -47,8 +70,9 @@ func NewProvider(config types.SecurityGroupConfig) (*Provider, error) {
 	}
 
 	return &Provider{
-		client: client,
-		region: config.Region,
+		client:     client,
+		region:     config.Region,
+		RuleHasher: &RuleHasher{},
 	}, nil
 }
 
@@ -114,4 +138,45 @@ func (p *Provider) GetRule(groupID string, ruleID string) (*types.SecurityRule, 
 // ListRules 获取安全组规则列表
 func (p *Provider) ListRules(groupID string) ([]types.SecurityRule, error) {
 	panic("not implemented")
+}
+
+// ListInstances 获取账号下的所有实例
+func (p *Provider) ListInstances() ([]types.Instance, error) {
+	slog.Debug("Requesting instances for region", "region", p.region)
+	request := &ecs.DescribeInstancesInput{}
+
+	response, err := p.client.DescribeInstances(request)
+	if err != nil {
+		return nil, fmt.Errorf("list instances failed: %v", err)
+	}
+
+	// 打印调试信息
+	slog.Debug("API Response Details", "response", response)
+
+	instances := make([]types.Instance, 0)
+	for _, i := range response.Instances {
+		// 获取公网IP，如果有的话
+		var publicIP string
+		if i.EipAddress != nil {
+			publicIP = *i.EipAddress.IpAddress
+		}
+
+		// 获取私网IP，如果有的话
+		var privateIP string
+		if len(i.NetworkInterfaces) > 0 {
+			privateIP = *i.NetworkInterfaces[0].PrimaryIpAddress
+		}
+
+		instances = append(instances, types.Instance{
+			InstanceID:       *i.InstanceId,
+			Name:             *i.InstanceName,
+			Status:           *i.Status,
+			PrivateIP:        privateIP,
+			PublicIP:         publicIP,
+			SecurityGroupIDs: []string{}, // 暂时设置为空切片，等待安全组API实现
+			Region:           p.region,
+		})
+	}
+
+	return instances, nil
 }
