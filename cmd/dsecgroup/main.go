@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/reckless-huang/dsecgroup/pkg/providers"
 	"io"
 	"log/slog"
 	"net"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/reckless-huang/dsecgroup/pkg/providers/aliyun"
+	"github.com/reckless-huang/dsecgroup/pkg/providers/volcengine"
 	"github.com/reckless-huang/dsecgroup/pkg/types"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -29,13 +31,19 @@ var (
 
 // Config 配置结构
 type Config struct {
-	CurrentRegion        string            `yaml:"current_region"`
-	CurrentInstance      string            `yaml:"current_instance"`
-	CurrentSecurityGroup string            `yaml:"current_security_group"`
-	AccessKey            string            `yaml:"access_key"`
-	SecretKey            string            `yaml:"secret_key"`
-	Log                  LogConfig         `yaml:"log"`
-	RuleAliases          map[string]string `yaml:"rule_aliases"`
+	Aliyun      *ProviderConfig   `yaml:"aliyun,omitempty"`
+	Volcengine  *ProviderConfig   `yaml:"volcengine,omitempty"`
+	Log         LogConfig         `yaml:"log"`
+	RuleAliases map[string]string `yaml:"rule_aliases"`
+}
+
+// ProviderConfig 云服务商配置结构
+type ProviderConfig struct {
+	AccessKey            string `yaml:"access_key"`
+	SecretKey            string `yaml:"secret_key"`
+	Region               string `yaml:"region"`
+	CurrentInstance      string `yaml:"current_instance,omitempty"`
+	CurrentSecurityGroup string `yaml:"current_security_group,omitempty"`
 }
 
 // 添加日志配置结构
@@ -182,7 +190,7 @@ func main() {
 
 // 创建 Provider 实例
 func createProvider() (types.SecurityGroupProvider, error) {
-	// 优先从命令行参数获取凭证，如果没有则从环境变量获取
+	// 优先从命令行参数获取凭证
 	ak := accessKey
 	sk := secretKey
 
@@ -192,18 +200,36 @@ func createProvider() (types.SecurityGroupProvider, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load config failed: %v", err)
 		}
-		ak = cfg.AccessKey
-		sk = cfg.SecretKey
+		// 从对应云服务商的配置中获取认证信息
+		switch provider {
+		case "aliyun":
+			if cfg.Aliyun != nil {
+				ak = cfg.Aliyun.AccessKey
+				sk = cfg.Aliyun.SecretKey
+			}
+		case "volcengine":
+			if cfg.Volcengine != nil {
+				ak = cfg.Volcengine.AccessKey
+				sk = cfg.Volcengine.SecretKey
+			}
+		}
 	}
 
-	// 如果配置文件也没有提供，则从环境变量获取
+	// 如果配置文件中有认证信息，就不再从环境变量获取
 	if ak == "" || sk == "" {
-		ak = os.Getenv("ALICLOUD_ACCESS_KEY")
-		sk = os.Getenv("ALICLOUD_SECRET_KEY")
+		// 配置文件中没有认证信息，尝试从环境变量获取
+		switch provider {
+		case "aliyun":
+			ak = os.Getenv("ALICLOUD_ACCESS_KEY")
+			sk = os.Getenv("ALICLOUD_SECRET_KEY")
+		case "volcengine":
+			ak = os.Getenv("VOLCENGINE_ACCESS_KEY")
+			sk = os.Getenv("VOLCENGINE_SECRET_KEY")
+		}
 	}
 
 	if ak == "" || sk == "" {
-		return nil, fmt.Errorf("access-key and secret-key are required (can be set via ALICLOUD_ACCESS_KEY and ALICLOUD_SECRET_KEY)")
+		return nil, fmt.Errorf("access-key and secret-key are required (can be set via %s_ACCESS_KEY and %s_SECRET_KEY)", strings.ToUpper(provider), strings.ToUpper(provider))
 	}
 
 	config := types.SecurityGroupConfig{
@@ -215,7 +241,14 @@ func createProvider() (types.SecurityGroupProvider, error) {
 		},
 	}
 
-	return aliyun.NewProvider(config)
+	switch provider {
+	case "aliyun":
+		return aliyun.NewProvider(config)
+	case "volcengine":
+		return volcengine.NewProvider(config)
+	default:
+		return nil, fmt.Errorf("unsupported provider: %s", provider)
+	}
 }
 
 // 列出可用地域
@@ -241,7 +274,6 @@ func newListRegionsCmd() *cobra.Command {
 			for _, r := range regions {
 				table.Append([]string{r.RegionID, r.LocalName})
 			}
-
 			// 渲染表格
 			table.Render()
 			return nil
@@ -261,12 +293,24 @@ func newListSecgroupsCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config failed: %v", err)
 			}
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("current region is not set")
-			} else {
-				region = cfg.CurrentRegion
-				fmt.Printf("Current region: %s\n", cfg.CurrentRegion)
+
+			// 从对应云服务商的配置中获取region
+			var currentRegion string
+			switch provider {
+			case "aliyun":
+				if cfg.Aliyun != nil {
+					currentRegion = cfg.Aliyun.Region
+				}
+			case "volcengine":
+				if cfg.Volcengine != nil {
+					currentRegion = cfg.Volcengine.Region
+				}
 			}
+			if currentRegion == "" {
+				return fmt.Errorf("no region selected for provider %s, please use select-region command first", provider)
+			}
+			region = currentRegion
+			fmt.Printf("Current region: %s\n", currentRegion)
 			p, err := createProvider()
 			if err != nil {
 				return err
@@ -347,21 +391,35 @@ func newRemoveSecgroupRuleCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config failed: %v", err)
 			}
-
-			// 设置region
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("no region selected, please use select-region command first")
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
 			}
-			region = cfg.CurrentRegion
-			slog.Debug("Using region", "region", region)
-
-			// 如果未指定安全组ID，使用当前选择的安全组
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
+			}
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
+				}
+			}
 			if secgroupID == "" {
-				if cfg.CurrentSecurityGroup == "" {
+				if currentProviderConfig.CurrentSecurityGroup != "" {
+					secgroupID = currentProviderConfig.CurrentSecurityGroup
+				} else {
+					slog.Error("no security group specified or selected")
 					return fmt.Errorf("no security group specified or selected")
 				}
-				secgroupID = cfg.CurrentSecurityGroup
 			}
+			slog.Debug("Using region", "region", region)
+			slog.Debug("Using security group", "security_group_id", secgroupID)
 
 			p, err := createProvider()
 			if err != nil {
@@ -444,20 +502,35 @@ func newListSecgroupRulesCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config failed: %v", err)
 			}
-
-			// 如果命令行没有指定安全组ID，则使用配置中的
-			if secgroupID == "" {
-				if cfg.CurrentSecurityGroup == "" {
-					return fmt.Errorf("no security group specified or selected, please use --secgroup-id flag or select-secgroup command")
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
+			}
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
+			}
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
 				}
-				secgroupID = cfg.CurrentSecurityGroup
 			}
-
-			// 使用配置中的地域
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("no region selected, please use select-region command first")
+			if secgroupID == "" {
+				if currentProviderConfig.CurrentSecurityGroup != "" {
+					secgroupID = currentProviderConfig.CurrentSecurityGroup
+				} else {
+					slog.Error("no security group specified or selected")
+					return fmt.Errorf("no security group specified or selected")
+				}
 			}
-			region = cfg.CurrentRegion
+			slog.Debug("Using region", "region", region)
+			slog.Debug("Using security group", "security_group_id", secgroupID)
 
 			p, err := createProvider()
 			if err != nil {
@@ -519,9 +592,17 @@ func newSelectRegionCmd() *cobra.Command {
 			if !valid {
 				return fmt.Errorf("invalid region ID: %s", regionID)
 			}
-
+			cfg, err := loadConfig()
+			if err != nil {
+				return fmt.Errorf("load config failed: %v", err)
+			}
 			// 保存选择的地域
-			cfg := Config{CurrentRegion: regionID}
+			switch provider {
+			case providers.ALIYUN:
+				cfg.Aliyun.Region = regionID
+			case providers.VOLCENGINE:
+				cfg.Volcengine.Region = regionID
+			}
 			if err := saveConfig(cfg); err != nil {
 				return fmt.Errorf("save config failed: %v", err)
 			}
@@ -545,10 +626,21 @@ func newListInstancesCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load config failed: %v", err)
 				}
-				if cfg.CurrentRegion == "" {
-					return fmt.Errorf("no region selected, please use select-region command first")
+				var currentRegion string
+				switch provider {
+				case "aliyun":
+					if cfg.Aliyun != nil {
+						currentRegion = cfg.Aliyun.Region
+					}
+				case "volcengine":
+					if cfg.Volcengine != nil {
+						currentRegion = cfg.Volcengine.Region
+					}
 				}
-				region = cfg.CurrentRegion
+				if currentRegion == "" {
+					return fmt.Errorf("no region selected for provider %s, please use select-region command first", provider)
+				}
+				region = currentRegion
 			}
 			slog.Info("Using region", "region", region)
 
@@ -602,10 +694,22 @@ func newSelectInstanceCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("load config failed: %v", err)
 				}
-				if cfg.CurrentRegion == "" {
-					return fmt.Errorf("no region selected, please use select-region command first")
+				// 从对应云服务商的配置中获取region
+				var currentRegion string
+				switch provider {
+				case "aliyun":
+					if cfg.Aliyun != nil {
+						currentRegion = cfg.Aliyun.Region
+					}
+				case "volcengine":
+					if cfg.Volcengine != nil {
+						currentRegion = cfg.Volcengine.Region
+					}
 				}
-				region = cfg.CurrentRegion
+				if currentRegion == "" {
+					return fmt.Errorf("no region selected for provider %s, please use select-region command first", provider)
+				}
+				region = currentRegion
 			}
 
 			// 验证实例是否存在
@@ -625,9 +729,19 @@ func newSelectInstanceCmd() *cobra.Command {
 			}
 
 			// 保存配置
-			cfg := Config{
-				CurrentRegion:   region,
-				CurrentInstance: instanceID,
+			cfg := Config{}
+			// 根据provider更新对应的配置
+			switch provider {
+			case "aliyun":
+				cfg.Aliyun = &ProviderConfig{
+					Region:          region,
+					CurrentInstance: instanceID,
+				}
+			case "volcengine":
+				cfg.Volcengine = &ProviderConfig{
+					Region:          region,
+					CurrentInstance: instanceID,
+				}
 			}
 			if err := saveConfig(cfg); err != nil {
 				return fmt.Errorf("save config failed: %v", err)
@@ -648,18 +762,31 @@ func newListInstanceSecgroupsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// 读取配置
 			cfg, err := loadConfig()
-			if err != nil {
-				return fmt.Errorf("load config failed: %v", err)
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
 			}
-			if cfg.CurrentInstance == "" {
-				return fmt.Errorf("no instance selected, please use select-instance command first")
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
 			}
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("no region selected, please use select-region command first")
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
+				}
 			}
 
-			// 使用配置中的地域
-			region = cfg.CurrentRegion
+			if currentProviderConfig.CurrentInstance == "" {
+				return fmt.Errorf("no instance selected, please use select-instance command first")
+			}
+
+			slog.Debug("Using region", "region", region)
 
 			p, err := createProvider()
 			if err != nil {
@@ -669,8 +796,8 @@ func newListInstanceSecgroupsCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("provider does not support instance operations")
 			}
-			fmt.Printf("Fetching security groups for instance %s...\n", cfg.CurrentInstance)
-			groups, err := instanceProvider.ListInstanceSecurityGroups(cfg.CurrentInstance)
+			fmt.Printf("Fetching security groups for instance %s...\n", currentProviderConfig.CurrentInstance)
+			groups, err := instanceProvider.ListInstanceSecurityGroups(currentProviderConfig.CurrentInstance)
 			if err != nil {
 				return err
 			}
@@ -700,13 +827,35 @@ func newSelectSecgroupCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config failed: %v", err)
 			}
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("no region selected, please use select-region command first")
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
 			}
-
-			// 使用配置中的地域
-			region = cfg.CurrentRegion
-
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
+			}
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
+				}
+			}
+			if secgroupID == "" {
+				if currentProviderConfig.CurrentSecurityGroup != "" {
+					secgroupID = currentProviderConfig.CurrentSecurityGroup
+				} else {
+					slog.Error("no security group specified or selected")
+					return fmt.Errorf("no security group specified or selected")
+				}
+			}
+			slog.Debug("Using region", "region", region)
+			slog.Debug("Using security group", "security_group_id", secgroupID)
 			// 验证安全组是否存在
 			p, err := createProvider()
 			if err != nil {
@@ -719,7 +868,7 @@ func newSelectSecgroupCmd() *cobra.Command {
 			}
 
 			// 保存配置
-			cfg.CurrentSecurityGroup = secgroupID
+			currentProviderConfig.CurrentSecurityGroup = secgroupID
 			if err := saveConfig(cfg); err != nil {
 				return fmt.Errorf("save config failed: %v", err)
 			}
@@ -727,10 +876,10 @@ func newSelectSecgroupCmd() *cobra.Command {
 			fmt.Printf("Current security group set to: %s (%s)\n", group.Name, group.GroupID)
 
 			// 如果有实例被选中，显示是否关联
-			if cfg.CurrentInstance != "" {
+			if currentProviderConfig.CurrentInstance != "" {
 				instanceProvider, ok := p.(types.InstanceProvider)
 				if ok {
-					groups, err := instanceProvider.ListInstanceSecurityGroups(cfg.CurrentInstance)
+					groups, err := instanceProvider.ListInstanceSecurityGroups(currentProviderConfig.CurrentInstance)
 					if err == nil {
 						associated := false
 						for _, g := range groups {
@@ -771,15 +920,26 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load config failed: %v", err)
 			}
-			if cfg.CurrentSecurityGroup == "" {
-				return fmt.Errorf("no security group selected, please use select-secgroup command first")
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
 			}
-			if cfg.CurrentRegion == "" {
-				return fmt.Errorf("no region selected, please use select-region command first")
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
+			}
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
+				}
 			}
 
-			// 设置全局 region 变量
-			region = cfg.CurrentRegion
 			slog.Debug("Using region", "region", region)
 
 			// 获取本地公网IP
@@ -812,11 +972,11 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 
 			// 修改这部分逻辑：如果没有指定端口或设置了 allPorts，则添加允许所有端口的规则
 			if allPorts || !cmd.Flags().Changed("port") {
-				return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, -1, fmt.Sprintf("gen_by_dsecgroup (%s, all ports)", aliasDesc))
+				return addOrUpdateRule(p, currentProviderConfig.CurrentSecurityGroup, ip, -1, fmt.Sprintf("gen_by_dsecgroup (%s, all ports)", aliasDesc))
 			}
 
 			// 添加指定端口的规则
-			return addOrUpdateRule(p, cfg.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (%s, port %d)", aliasDesc, port))
+			return addOrUpdateRule(p, currentProviderConfig.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (%s, port %d)", aliasDesc, port))
 		},
 	}
 
