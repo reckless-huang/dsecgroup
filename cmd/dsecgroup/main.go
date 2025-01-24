@@ -687,13 +687,12 @@ func newSelectInstanceCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			instanceID := args[0]
-
+			cfg, err := loadConfig()
+			if err != nil {
+				return fmt.Errorf("load config failed: %v", err)
+			}
 			// 如果没有指定地域，从配置文件读取
 			if region == "" {
-				cfg, err := loadConfig()
-				if err != nil {
-					return fmt.Errorf("load config failed: %v", err)
-				}
 				// 从对应云服务商的配置中获取region
 				var currentRegion string
 				switch provider {
@@ -729,19 +728,12 @@ func newSelectInstanceCmd() *cobra.Command {
 			}
 
 			// 保存配置
-			cfg := Config{}
 			// 根据provider更新对应的配置
 			switch provider {
 			case "aliyun":
-				cfg.Aliyun = &ProviderConfig{
-					Region:          region,
-					CurrentInstance: instanceID,
-				}
+				cfg.Aliyun.CurrentInstance = instanceID
 			case "volcengine":
-				cfg.Volcengine = &ProviderConfig{
-					Region:          region,
-					CurrentInstance: instanceID,
-				}
+				cfg.Volcengine.CurrentInstance = instanceID
 			}
 			if err := saveConfig(cfg); err != nil {
 				return fmt.Errorf("save config failed: %v", err)

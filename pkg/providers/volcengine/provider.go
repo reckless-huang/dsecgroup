@@ -18,8 +18,42 @@ type Provider struct {
 }
 
 func (p *Provider) GetInstance(instanceID string) (*types.Instance, error) {
-	//TODO implement me
-	panic("implement me")
+	slog.Debug("Getting instance details", "instance_id", instanceID, "region", p.region)
+	request := &ecs.DescribeInstancesInput{}
+
+	response, err := p.client.DescribeInstances(request)
+	if err != nil {
+		return nil, fmt.Errorf("get instance failed: %v", err)
+	}
+
+	// 遍历实例列表查找匹配的实例ID
+	for _, i := range response.Instances {
+		if *i.InstanceId == instanceID {
+			// 获取公网IP，如果有的话
+			var publicIP string
+			if i.EipAddress != nil {
+				publicIP = *i.EipAddress.IpAddress
+			}
+
+			// 获取私网IP，如果有的话
+			var privateIP string
+			if len(i.NetworkInterfaces) > 0 {
+				privateIP = *i.NetworkInterfaces[0].PrimaryIpAddress
+			}
+
+			return &types.Instance{
+				InstanceID:       *i.InstanceId,
+				Name:             *i.InstanceName,
+				Status:           *i.Status,
+				PrivateIP:        privateIP,
+				PublicIP:         publicIP,
+				SecurityGroupIDs: []string{}, // 暂时设置为空切片，等待安全组API实现
+				Region:           p.region,
+			}, nil
+		}
+	}
+
+	return nil, fmt.Errorf("instance not found: %s", instanceID)
 }
 
 func (p *Provider) ListInstanceSecurityGroups(instanceID string) ([]types.SecurityGroup, error) {
