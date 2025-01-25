@@ -1,3 +1,17 @@
-current_region: cn-hangzhou
-current_instance: ""
-current_security_group: ""
+aliyun:
+    access_key: ""
+    secret_key: ""
+    region: cn-hangzhou
+    current_instance: i-bp18ql2a7pd0ytmk305v
+    current_security_group: sg-bp1f6y7ohkp3mi91vh3a
+volcengine:
+    access_key: ""
+    secret_key: ""
+    region: cn-beijing
+    current_instance: i-yd8wmeo0sgxjd1tcsve5
+    current_security_group: sg-13fyg73uwp14w3n6nu5ojibwu
+log:
+    level: ""
+    format: ""
+rule_aliases:
+    tmp: tmp

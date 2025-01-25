@@ -2,6 +2,7 @@ package volcengine
 
 import (
 	"fmt"
+	"github.com/volcengine/volcengine-go-sdk/service/vpc"
 	"log/slog"
 
 	"github.com/reckless-huang/dsecgroup/pkg/types"
@@ -12,8 +13,10 @@ import (
 )
 
 type Provider struct {
-	client *ecs.ECS
-	region string
+	client            *ecs.ECS
+	vpcClient         *vpc.VPC
+	currentInstanceId string
+	region            string
 	types.RuleHasher
 }
 
@@ -35,6 +38,11 @@ func (p *Provider) GetInstance(instanceID string) (*types.Instance, error) {
 				publicIP = *i.EipAddress.IpAddress
 			}
 
+			// 获取网卡id
+			var cniIDs []*string
+			for _, cni := range i.NetworkInterfaces {
+				cniIDs = append(cniIDs, cni.NetworkInterfaceId)
+			}
 			// 获取私网IP，如果有的话
 			var privateIP string
 			if len(i.NetworkInterfaces) > 0 {
@@ -49,6 +57,7 @@ func (p *Provider) GetInstance(instanceID string) (*types.Instance, error) {
 				PublicIP:         publicIP,
 				SecurityGroupIDs: []string{}, // 暂时设置为空切片，等待安全组API实现
 				Region:           p.region,
+				CNIID:            cniIDs,
 			}, nil
 		}
 	}
@@ -57,8 +66,50 @@ func (p *Provider) GetInstance(instanceID string) (*types.Instance, error) {
 }
 
 func (p *Provider) ListInstanceSecurityGroups(instanceID string) ([]types.SecurityGroup, error) {
-	//TODO implement me
-	panic("implement me")
+	instance, getInstanceErr := p.GetInstance(instanceID)
+	if getInstanceErr != nil {
+		slog.Error("Get instance failed", "err", getInstanceErr)
+		return nil, getInstanceErr
+	}
+	// 获取id
+	secGroupIDs := []string{}
+	for _, cniID := range instance.CNIID {
+		describeNetworkInterfaceAttributesInput := &vpc.DescribeNetworkInterfaceAttributesInput{
+			NetworkInterfaceId: cniID,
+		}
+
+		// 复制代码运行示例，请自行打印API返回值。
+		res, err := p.vpcClient.DescribeNetworkInterfaceAttributes(describeNetworkInterfaceAttributesInput)
+		if err != nil {
+			slog.Error("DescribeNetworkInterfaceAttributes failed", "err", err)
+			return nil, err
+		} else {
+			for _, group := range res.SecurityGroupIds {
+				secGroupIDs = append(secGroupIDs, *group)
+			}
+		}
+	}
+	var securityGroups []types.SecurityGroup
+	// 获取详情
+	for _, secGroupID := range secGroupIDs {
+		describeSecurityGroupAttributesInput := &vpc.DescribeSecurityGroupAttributesInput{
+			SecurityGroupId: volcengine.String(secGroupID),
+		}
+
+		res, err := p.vpcClient.DescribeSecurityGroupAttributes(describeSecurityGroupAttributesInput)
+		if err != nil {
+			slog.Error("DescribeNetworkInterfaceAttributes failed", "err", err)
+			return nil, fmt.Errorf("DescribeNetworkInterfaceAttributes failed", "err", err)
+		}
+		securityGroups = append(securityGroups, types.SecurityGroup{
+			GroupID:     secGroupID,
+			Name:        *res.SecurityGroupName,
+			Description: *res.Description,
+			VpcID:       *res.VpcId,
+			CreatedAt:   "",
+		})
+	}
+	return securityGroups, nil
 }
 
 func (p *Provider) AddInstanceToSecurityGroup(instanceID, securityGroupID string) error {
@@ -102,11 +153,16 @@ func NewProvider(config types.SecurityGroupConfig) (*Provider, error) {
 	if client == nil {
 		return nil, fmt.Errorf("create volcengine client failed")
 	}
-
+	vpcClient := vpc.New(sess)
+	if vpcClient == nil {
+		return nil, fmt.Errorf("create volcengine vpc client failed")
+	}
 	return &Provider{
-		client:     client,
-		region:     config.Region,
-		RuleHasher: &RuleHasher{},
+		client:            client,
+		region:            config.Region,
+		vpcClient:         vpcClient,
+		RuleHasher:        &RuleHasher{},
+		currentInstanceId: config.CurrentInstanceId,
 	}, nil
 }
 
@@ -131,12 +187,27 @@ func (p *Provider) ListRegions() ([]types.Region, error) {
 
 // ListSecurityGroups 获取安全组列表
 func (p *Provider) ListSecurityGroups() ([]types.SecurityGroup, error) {
-	panic("not implemented")
+	return p.ListInstanceSecurityGroups(p.currentInstanceId)
 }
 
 // GetSecurityGroup 获取安全组详情
 func (p *Provider) GetSecurityGroup(groupID string) (*types.SecurityGroup, error) {
-	panic("not implemented")
+	describeSecurityGroupAttributesInput := &vpc.DescribeSecurityGroupAttributesInput{
+		SecurityGroupId: volcengine.String(groupID),
+	}
+
+	res, err := p.vpcClient.DescribeSecurityGroupAttributes(describeSecurityGroupAttributesInput)
+	if err != nil {
+		slog.Error("DescribeNetworkInterfaceAttributes failed", "err", err)
+		return nil, fmt.Errorf("DescribeNetworkInterfaceAttributes failed", "err", err)
+	}
+	return &types.SecurityGroup{
+		GroupID:     groupID,
+		Name:        *res.SecurityGroupName,
+		Description: *res.Description,
+		VpcID:       *res.VpcId,
+		CreatedAt:   "",
+	}, nil
 }
 
 // CreateSecurityGroup 创建安全组
@@ -178,7 +249,7 @@ func (p *Provider) ListRules(groupID string) ([]types.SecurityRule, error) {
 func (p *Provider) ListInstances() ([]types.Instance, error) {
 	slog.Debug("Requesting instances for region", "region", p.region)
 	request := &ecs.DescribeInstancesInput{}
-
+	// TODO(huangyf) 这里需要处理分页
 	response, err := p.client.DescribeInstances(request)
 	if err != nil {
 		return nil, fmt.Errorf("list instances failed: %v", err)

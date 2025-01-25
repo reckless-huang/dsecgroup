@@ -319,7 +319,7 @@ func (p *Provider) ListInstances() ([]types.Instance, error) {
 	slog.Debug("Requesting instances for region: %s\n", p.region)
 	request := ecs.CreateDescribeInstancesRequest()
 	request.RegionId = p.region
-
+	// TODO(huangyf) 这里需要处理分页
 	response, err := p.client.DescribeInstances(request)
 	if err != nil {
 		return nil, fmt.Errorf("list instances failed: %v", err)

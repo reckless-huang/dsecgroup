@@ -2,13 +2,14 @@ package types
 
 // Instance 表示云服务器实例
 type Instance struct {
-	InstanceID       string   `json:"instance_id"`
-	Name             string   `json:"name"`
-	Status           string   `json:"status"`
-	PrivateIP        string   `json:"private_ip"`
-	PublicIP         string   `json:"public_ip"`
-	SecurityGroupIDs []string `json:"security_group_ids"`
-	Region           string   `json:"region"`
+	InstanceID       string    `json:"instance_id"`
+	Name             string    `json:"name"`
+	Status           string    `json:"status"`
+	PrivateIP        string    `json:"private_ip"`
+	PublicIP         string    `json:"public_ip"`
+	CNIID            []*string `json:"cni_id"`
+	SecurityGroupIDs []string  `json:"security_group_ids"`
+	Region           string    `json:"region"`
 }
 
 // InstanceProvider 定义了云服务器操作的接口

@@ -193,21 +193,20 @@ func createProvider() (types.SecurityGroupProvider, error) {
 	// 优先从命令行参数获取凭证
 	ak := accessKey
 	sk := secretKey
-
+	cfg, err := loadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load config failed: %v", err)
+	}
 	// 如果命令行参数没有提供，则从配置文件获取
 	if ak == "" || sk == "" {
-		cfg, err := loadConfig()
-		if err != nil {
-			return nil, fmt.Errorf("load config failed: %v", err)
-		}
 		// 从对应云服务商的配置中获取认证信息
 		switch provider {
-		case "aliyun":
+		case providers.ALIYUN:
 			if cfg.Aliyun != nil {
 				ak = cfg.Aliyun.AccessKey
 				sk = cfg.Aliyun.SecretKey
 			}
-		case "volcengine":
+		case providers.VOLCENGINE:
 			if cfg.Volcengine != nil {
 				ak = cfg.Volcengine.AccessKey
 				sk = cfg.Volcengine.SecretKey
@@ -219,10 +218,10 @@ func createProvider() (types.SecurityGroupProvider, error) {
 	if ak == "" || sk == "" {
 		// 配置文件中没有认证信息，尝试从环境变量获取
 		switch provider {
-		case "aliyun":
+		case providers.ALIYUN:
 			ak = os.Getenv("ALICLOUD_ACCESS_KEY")
 			sk = os.Getenv("ALICLOUD_SECRET_KEY")
-		case "volcengine":
+		case providers.VOLCENGINE:
 			ak = os.Getenv("VOLCENGINE_ACCESS_KEY")
 			sk = os.Getenv("VOLCENGINE_SECRET_KEY")
 		}
@@ -242,9 +241,10 @@ func createProvider() (types.SecurityGroupProvider, error) {
 	}
 
 	switch provider {
-	case "aliyun":
+	case providers.ALIYUN:
 		return aliyun.NewProvider(config)
-	case "volcengine":
+	case providers.VOLCENGINE:
+		config.CurrentInstanceId = cfg.Volcengine.CurrentInstance
 		return volcengine.NewProvider(config)
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", provider)

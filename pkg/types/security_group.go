@@ -55,9 +55,10 @@ type SecurityGroup struct {
 
 // SecurityGroupConfig 定义云服务商配置
 type SecurityGroupConfig struct {
-	Provider   string            `json:"provider"`   // 云服务商标识：aliyun, aws, etc
-	Region     string            `json:"region"`     // 区域
-	Credential map[string]string `json:"credential"` // 认证信息
+	CurrentInstanceId string            `json:"id"`
+	Provider          string            `json:"provider"`   // 云服务商标识：aliyun, aws, etc
+	Region            string            `json:"region"`     // 区域
+	Credential        map[string]string `json:"credential"` // 认证信息
 }
 
 // ProviderFactory 定义了创建 Provider 的工厂接口
