@@ -7,6 +7,7 @@ A unified interface for managing security groups across different cloud provider
 - Abstract cloud provider interfaces
 - Multiple cloud provider support:
   - Aliyun (Alibaba Cloud)
+  - Volcengine (ByteDance Cloud)
   - More providers coming soon...
 - Resource management:
   - Security Groups (create, delete, query)
@@ -32,34 +33,55 @@ go get github.com/your-username/your-project
 Create a `config.yaml` file:
 
 ```yaml
-current_region: cn-hangzhou
-current_instance: i-xxxxx
-current_security_group: sg-xxxxx
-access_key: your-access-key
-secret_key: your-secret-key
+aliyun:
+    access_key: "your-access-key"
+    secret_key: "your-secret-key"
+    region: "cn-hangzhou"
+    current_instance: "i-xxx"
+    current_security_group: "sg-xxx"
+volcengine:
+    access_key: "your-access-key"
+    secret_key: "your-secret-key"
+    region: "cn-beijing"
+    current_instance: "i-xxx"
+    current_security_group: "sg-xxx"
 
 log:
-  level: "debug"    # Options: debug, info, warn, error
-  format: "text"    # Options: text, json
+    level: "debug"    # Options: debug, info, warn, error
+    format: "text"    # Options: text, json
 
 rule_aliases:
-  home: "Home IP"
-  office: "Office IP"
-  default: "Temporary IP"
+    home: "Home IP"
+    office: "Office IP"
+    tmp: "Temporary IP"
 ```
 
 ### Command Line Usage
 
 ```bash
-# List security groups
-dsecgroup list-secgroups
+# Select cloud provider
+dsecgroup --provider aliyun ...
+dsecgroup --provider volcengine ...
 
-# List security group rules
-dsecgroup list-secgroup-rules
+# List regions and select one
+dsecgroup list-regions
+dsecgroup select-region -r cn-beijing
+
+# List instances and select one
+dsecgroup list-instances
+dsecgroup select-instance -i i-xxx
+
+# List security groups and select one
+dsecgroup list-secgroups
+dsecgroup select-secgroup -g sg-xxx
 
 # Quick add local IP
 dsecgroup quick-add-local --port 22 --alias home
 dsecgroup quick-add-local --all-ports --alias office
+
+# Add specific rule
+dsecgroup add-secgroup-rule --ip 1.2.3.4/32 --port 80
+dsecgroup add-secgroup-rule --ip 1.2.3.4/32 --port -1  # all ports
 
 # Remove rules
 dsecgroup remove-secgroup-rule -i rule-id-1,rule-id-2  # Remove by rule IDs

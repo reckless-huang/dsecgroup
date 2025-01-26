@@ -7,6 +7,7 @@
 - 抽象云服务提供商接口
 - 支持多个云服务提供商：
   - 阿里云
+  - 火山引擎
   - 更多提供商即将支持...
 - 资源管理：
   - 安全组（创建、删除、查询）
@@ -32,34 +33,55 @@ go get github.com/your-username/your-project
 创建 `config.yaml` 文件：
 
 ```yaml
-current_region: cn-hangzhou
-current_instance: i-xxxxx
-current_security_group: sg-xxxxx
-access_key: your-access-key
-secret_key: your-secret-key
+aliyun:
+    access_key: "你的访问密钥"
+    secret_key: "你的访问密钥密码"
+    region: "cn-hangzhou"
+    current_instance: "i-xxx"
+    current_security_group: "sg-xxx"
+volcengine:
+    access_key: "你的访问密钥"
+    secret_key: "你的访问密钥密码"
+    region: "cn-beijing"
+    current_instance: "i-xxx"
+    current_security_group: "sg-xxx"
 
 log:
-  level: "debug"    # 可选值: debug, info, warn, error
-  format: "text"    # 可选值: text, json
+    level: "debug"    # 可选值: debug, info, warn, error
+    format: "text"    # 可选值: text, json
 
 rule_aliases:
-  home: "家庭IP"
-  office: "办公室IP"
-  default: "临时IP"
+    home: "家庭IP"
+    office: "办公室IP"
+    tmp: "临时IP"
 ```
 
 ### 命令行使用
 
 ```bash
-# 列出安全组
-dsecgroup list-secgroups
+# 选择云服务提供商
+dsecgroup --provider aliyun ...
+dsecgroup --provider volcengine ...
 
-# 列出安全组规则
-dsecgroup list-secgroup-rules
+# 列出并选择地域
+dsecgroup list-regions
+dsecgroup select-region -r cn-beijing
+
+# 列出并选择实例
+dsecgroup list-instances
+dsecgroup select-instance -i i-xxx
+
+# 列出并选择安全组
+dsecgroup list-secgroups
+dsecgroup select-secgroup -g sg-xxx
 
 # 快速添加本地IP
 dsecgroup quick-add-local --port 22 --alias home
 dsecgroup quick-add-local --all-ports --alias office
+
+# 添加特定规则
+dsecgroup add-secgroup-rule --ip 1.2.3.4/32 --port 80
+dsecgroup add-secgroup-rule --ip 1.2.3.4/32 --port -1  # 所有端口
 
 # 删除规则
 dsecgroup remove-secgroup-rule -i rule-id-1,rule-id-2  # 通过规则ID删除
