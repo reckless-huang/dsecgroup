@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/reckless-huang/dsecgroup/pkg/providers"
 	"io"
 	"log/slog"
 	"net"
@@ -12,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/reckless-huang/dsecgroup/pkg/providers"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/reckless-huang/dsecgroup/pkg/providers/aliyun"
@@ -340,26 +341,75 @@ func newListSecgroupsCmd() *cobra.Command {
 func newAddSecgroupRuleCmd() *cobra.Command {
 	var (
 		secgroupID string
-		port       int
 		ip         string
+		port       int
 	)
 
 	cmd := &cobra.Command{
 		Use:   "add-secgroup-rule",
 		Short: "Add security group rule",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 读取配置
+			cfg, err := loadConfig()
+			if err != nil {
+				return fmt.Errorf("load config failed: %v", err)
+			}
+
+			var currentProviderConfig *ProviderConfig
+			switch provider {
+			case providers.ALIYUN:
+				currentProviderConfig = cfg.Aliyun
+			case providers.VOLCENGINE:
+				currentProviderConfig = cfg.Volcengine
+			}
+			if currentProviderConfig == nil {
+				return fmt.Errorf("no provider config found for provider %s", provider)
+			}
+
+			// 从对应云服务商的配置中获取region
+			if region == "" {
+				if currentProviderConfig.Region != "" {
+					region = currentProviderConfig.Region
+				} else {
+					slog.Error("no region specified or selected")
+					return fmt.Errorf("no region specified or selected")
+				}
+			}
+
+			// 如果未指定安全组ID，使用当前选择的安全组
+			if secgroupID == "" {
+				if currentProviderConfig.CurrentSecurityGroup == "" {
+					return fmt.Errorf("no security group specified or selected")
+				}
+				secgroupID = currentProviderConfig.CurrentSecurityGroup
+			}
+
+			// 检查必要参数
+			if ip == "" {
+				return fmt.Errorf("ip is required")
+			}
+
+			// 创建provider
 			p, err := createProvider()
 			if err != nil {
 				return err
 			}
 
+			// 创建规则
 			rule := types.SecurityRule{
-				IP:        ip,
-				Port:      port,
-				Protocol:  "ALL",
-				Direction: "ingress",
-				Action:    types.ActionAllow,
-				Priority:  1,
+				IP:          ip,
+				Port:        port,
+				Protocol:    "tcp",
+				Direction:   "ingress",
+				Action:      "accept",
+				Priority:    1,
+				Description: fmt.Sprintf("dsecgroup-port-%d", port),
+			}
+
+			// 如果端口为 -1，表示所有端口
+			if port == -1 {
+				rule.Protocol = "all"
+				rule.Description = "dsecgroup-all-ports"
 			}
 
 			return p.AddRule(secgroupID, rule)
@@ -367,9 +417,8 @@ func newAddSecgroupRuleCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&secgroupID, "secgroup-id", "g", "", "Security group ID")
-	cmd.Flags().IntVarP(&port, "port", "P", 22, "Port number")
 	cmd.Flags().StringVarP(&ip, "ip", "i", "", "IP address")
-	cmd.MarkFlagRequired("secgroup-id")
+	cmd.Flags().IntVarP(&port, "port", "P", 22, "Port number (-1 for all ports)")
 
 	return cmd
 }
@@ -922,6 +971,7 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 			if currentProviderConfig == nil {
 				return fmt.Errorf("no provider config found for provider %s", provider)
 			}
+
 			// 从对应云服务商的配置中获取region
 			if region == "" {
 				if currentProviderConfig.Region != "" {
@@ -932,7 +982,10 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 				}
 			}
 
-			slog.Debug("Using region", "region", region)
+			// 检查安全组
+			if currentProviderConfig.CurrentSecurityGroup == "" {
+				return fmt.Errorf("no security group selected, please use select-secgroup command first")
+			}
 
 			// 获取本地公网IP
 			ip, err := getLocalPublicIP()
@@ -942,18 +995,12 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 			ip = ip + "/32" // 转换为CIDR格式
 
 			// 处理规则别名
-			aliasDesc := "临时IP"
+			aliasDesc := "tmp"
 			if alias != "" {
 				if desc, ok := cfg.RuleAliases[alias]; ok {
 					aliasDesc = desc
-					slog.Debug("Using alias description", "alias", alias, "desc", aliasDesc)
 				} else {
-					slog.Warn("Alias not found in config, using alias as description", "alias", alias)
 					aliasDesc = alias
-				}
-			} else {
-				if desc, ok := cfg.RuleAliases["default"]; ok {
-					aliasDesc = desc
 				}
 			}
 
@@ -962,81 +1009,35 @@ func newQuickAddLocalIPCmd() *cobra.Command {
 				return err
 			}
 
-			// 修改这部分逻辑：如果没有指定端口或设置了 allPorts，则添加允许所有端口的规则
+			// 如果设置了 allPorts 或未指定端口，则添加允许所有端口的规则
 			if allPorts || !cmd.Flags().Changed("port") {
-				return addOrUpdateRule(p, currentProviderConfig.CurrentSecurityGroup, ip, -1, fmt.Sprintf("gen_by_dsecgroup (%s, all ports)", aliasDesc))
+				port = -1
 			}
 
-			// 添加指定端口的规则
-			return addOrUpdateRule(p, currentProviderConfig.CurrentSecurityGroup, ip, port, fmt.Sprintf("gen_by_dsecgroup (%s, port %d)", aliasDesc, port))
+			// 创建规则
+			rule := types.SecurityRule{
+				IP:          ip,
+				Port:        port,
+				Protocol:    "tcp",
+				Direction:   "ingress",
+				Action:      "accept",
+				Priority:    1,
+				Description: fmt.Sprintf("dsecgroup-%s-port-%d", aliasDesc, port),
+			}
+
+			// 如果是所有端口，更新协议和描述
+			if port == -1 {
+				rule.Protocol = "all"
+				rule.Description = fmt.Sprintf("dsecgroup-%s-all-ports", aliasDesc)
+			}
+
+			return p.AddRule(currentProviderConfig.CurrentSecurityGroup, rule)
 		},
 	}
 
-	// 修改默认端口的帮助文本，使其更清晰
-	cmd.Flags().IntVarP(&port, "port", "p", 22, "Specific port number to allow access (if not specified, all ports will be allowed)")
-	cmd.Flags().BoolVar(&allPorts, "all-ports", false, "Allow access to all ports")
+	cmd.Flags().IntVarP(&port, "port", "p", 22, "Port number")
+	cmd.Flags().BoolVar(&allPorts, "all-ports", false, "Allow all ports")
 	cmd.Flags().StringVarP(&alias, "alias", "a", "", "Rule alias name defined in config")
+
 	return cmd
-}
-
-// 添加或更新规则的通用函数
-func addOrUpdateRule(p types.SecurityGroupProvider, secGroupID, ip string, port int, desc string) error {
-	rule := types.SecurityRule{
-		IP:          ip,
-		Port:        port,
-		Protocol:    "tcp",
-		Direction:   "ingress",
-		Action:      types.ActionAllow,
-		Priority:    1,
-		Description: desc,
-	}
-
-	// 如果是所有端口，则使用 all 协议
-	if port == -1 {
-		rule.Protocol = "all"
-	}
-
-	// 检查规则是否存在
-	rules, err := p.ListRules(secGroupID)
-	if err != nil {
-		return err
-	}
-
-	matchRules := []types.SecurityRule{}
-	if hasher, ok := p.(types.RuleHasher); ok {
-		slog.Debug("desc", "desc", desc)
-		for _, existing := range rules {
-			slog.Debug("existing rule", "rule", existing.Description)
-			if existing.Description == desc {
-				matchRules = append(matchRules, existing)
-			}
-			if hasher.IsRuleEqual(existing, rule) {
-				slog.Info("Rule already exists for IP %s", "ip", ip)
-				return nil
-			}
-		}
-	}
-
-	if len(matchRules) > 1 {
-		slog.Error("Found multiple rules with the same description", "desc", desc)
-		slog.Error("Rules", "rules", matchRules)
-		slog.Error("run remove-secgroup-rule to remove the existing rule")
-		return fmt.Errorf("found multiple rules with the same description: %v", matchRules)
-	}
-
-	create := len(matchRules) == 0
-	if create {
-		slog.Info("No rule found with the same description, creating new rule", "desc", desc)
-		if err := p.AddRule(secGroupID, rule); err != nil {
-			return fmt.Errorf("add rule failed: %v", err)
-		}
-	} else {
-		rule = matchRules[0]
-		if err := p.UpdateRule(secGroupID, rule.RuleHash, rule); err != nil {
-			return fmt.Errorf("update rule failed: %v", err)
-		}
-	}
-
-	fmt.Printf("Successfully applied rule for IP %s on port %d\n", ip, port)
-	return nil
 }
